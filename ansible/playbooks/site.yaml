@@ -1,0 +1,17 @@
+---
+- name: Configure backend servers
+  hosts: backends
+  become: true
+  roles:
+    - backend
+
+- name: Configure frontend server
+  hosts: frontend
+  become: true
+  vars:
+    backend1_private_ip: 10.0.1.207
+    backend2_private_ip: 10.0.1.184
+    backup_backend_private_ip: 10.0.1.215
+  roles:
+    - frontend
+

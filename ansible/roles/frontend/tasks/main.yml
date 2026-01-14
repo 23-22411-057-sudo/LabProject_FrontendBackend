@@ -1,0 +1,21 @@
+---
+- name: Install Nginx
+  apt:
+    name: nginx
+    state: present
+    update_cache: yes
+  become: true
+
+- name: Enable and start Nginx
+  service:
+    name: nginx
+    state: started
+    enabled: yes
+  become: true
+
+- name: Deploy Nginx frontend config
+  template:
+    src: nginx_frontend.conf.j2
+    dest: /etc/nginx/nginx.conf
+  notify: Restart nginx
+  become: true
