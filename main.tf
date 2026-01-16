@@ -62,7 +62,7 @@ resource "aws_route_table" "public_rt" {
   }
 }
 
-# Associate route table with subnet
+# Route Table Association
 resource "aws_route_table_association" "public_assoc" {
   subnet_id      = aws_subnet.public.id
   route_table_id = aws_route_table.public_rt.id
@@ -73,7 +73,6 @@ resource "aws_security_group" "web_sg" {
   name   = "${var.env_prefix}-web-sg"
   vpc_id = aws_vpc.main.id
 
-  # SSH from your current IP
   ingress {
     description = "SSH from my IP"
     from_port   = 22
@@ -82,7 +81,6 @@ resource "aws_security_group" "web_sg" {
     cidr_blocks = ["${chomp(data.http.my_ip.body)}/32"]
   }
 
-  # HTTP from anywhere
   ingress {
     description = "HTTP from Internet"
     from_port   = 80
@@ -91,7 +89,6 @@ resource "aws_security_group" "web_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # All outbound allowed
   egress {
     from_port   = 0
     to_port     = 0
@@ -106,8 +103,8 @@ resource "aws_security_group" "web_sg" {
 
 # Key Pair
 resource "aws_key_pair" "lab_key" {
-  key_name   = "${var.env_prefix}-key"
-  public_key = file("/home/codespace/.ssh/lab_aws_key.pub")
+  key_name   = "lab-terraform-key"
+  public_key = file("~/.ssh/lab_key.pub")
 }
 
 # Frontend instance
@@ -126,16 +123,59 @@ resource "aws_instance" "frontend" {
 
 # Backend instances
 resource "aws_instance" "backend" {
-  count                        = 3
-  ami                          = data.aws_ami.amazon_linux.id
-  instance_type                = var.instance_type
-  key_name                     = aws_key_pair.lab_key.key_name
-  subnet_id                    = aws_subnet.public.id
-  vpc_security_group_ids       = [aws_security_group.web_sg.id]
-  associate_public_ip_address  = true
+  count                       = 3
+  ami                         = data.aws_ami.amazon_linux.id
+  instance_type               = var.instance_type
+  key_name                    = aws_key_pair.lab_key.key_name
+  subnet_id                   = aws_subnet.public.id
+  vpc_security_group_ids      = [aws_security_group.web_sg.id]
+  associate_public_ip_address = true
 
   tags = {
     Name = "${var.env_prefix}-backend-${count.index + 1}"
   }
 }
 
+# Generate Ansible inventory
+resource "local_file" "ansible_inventory" {
+  filename = "generated_hosts.ini"
+
+  content = <<EOT
+[frontend]
+${aws_instance.frontend.public_ip}
+
+[backends]
+%{ for ip in aws_instance.backend[*].public_ip ~}
+${ip}
+%{ endfor ~}
+EOT
+}
+
+# Run Ansible
+resource "null_resource" "ansible_config" {
+  triggers = {
+    frontend_ip = aws_instance.frontend.public_ip
+    backend_ips = join(",", aws_instance.backend[*].public_ip)
+  }
+
+  depends_on = [
+    aws_instance.frontend,
+    aws_instance.backend,
+    local_file.ansible_inventory
+  ]
+
+  provisioner "local-exec" {
+  command = <<-EOT
+    echo "Waiting for SSH on all instances..."
+    sleep 60
+
+    cd ansible
+    ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook \
+      -u ec2-user \
+      --private-key ~/.ssh/lab_key \
+      -i ../generated_hosts.ini \
+      playbooks/site.yaml
+  EOT
+}
+
+}
